@@ -13,7 +13,7 @@
 
 ## 2.1.写锁的获取 ##
 同步组件的实现聚合了同步器（AQS），并通过重写重写同步器（AQS）中的方法实现同步组件的同步语义（关于同步组件的实现层级结构可以[看这篇文章](https://juejin.im/post/5aeb055b6fb9a07abf725c8c)，AQS的底层实现分析可以[看这篇文章](https://juejin.im/post/5aeb07ab6fb9a07ac36350c8)）。因此，写锁的实现依然也是采用这种方式。在同一时刻写锁是不能被多个线程所获取，很显然写锁是独占式锁，而实现写锁的同步语义是通过重写AQS中的tryAcquire方法实现的。源码为:
-
+```java
 	protected final boolean tryAcquire(int acquires) {
 	    /*
 	     * Walkthrough:
@@ -51,14 +51,14 @@
 	    setExclusiveOwnerThread(current);
 	    return true;
 	}
-
+```
 这段代码的逻辑请看注释，这里有一个地方需要重点关注，exclusiveCount(c)方法，该方法源码为：
 	
 	static int exclusiveCount(int c) { return c & EXCLUSIVE_MASK; }
 其中**EXCLUSIVE_MASK**为:  `static final int EXCLUSIVE_MASK = (1 << SHARED_SHIFT) - 1;`      EXCLUSIVE _MASK为1左移16位然后减1，即为0x0000FFFF。而exclusiveCount方法是将同步状态（state为int类型）与0x0000FFFF相与，即取同步状态的低16位。那么低16位代表什么呢？根据exclusiveCount方法的注释为独占式获取的次数即写锁被获取的次数，现在就可以得出来一个结论**同步状态的低16位用来表示写锁的获取次数**。同时还有一个方法值得我们注意：
-
+```java
 	static int sharedCount(int c)    { return c >>> SHARED_SHIFT; }
-
+```
 该方法是获取读锁被获取的次数，是将同步状态（int c）右移16次，即取同步状态的高16位，现在我们可以得出另外一个结论**同步状态的高16位用来表示读锁被获取的次数**。现在还记得我们开篇说的需要弄懂的第一个问题吗？读写锁是怎样实现分别记录读锁和写锁的状态的，现在这个问题的答案就已经被我们弄清楚了，其示意图如下图所示：
 
 ![读写锁的读写状态设计.png](http://upload-images.jianshu.io/upload_images/2615789-6af1818bbfa83051.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
@@ -68,7 +68,7 @@
 
 ## 2.2.写锁的释放 ##
 写锁释放通过重写AQS的tryRelease方法，源码为：
-
+```java
 	protected final boolean tryRelease(int releases) {
 	    if (!isHeldExclusively())
 	        throw new IllegalMonitorStateException();
@@ -82,13 +82,13 @@
 	    setState(nextc);
 	    return free;
 	}
-
+```
 源码的实现逻辑请看注释，不难理解与ReentrantLock基本一致，这里需要注意的是，减少写状态` int nextc = getState() - releases;`只需要用**当前同步状态直接减去写状态的原因正是我们刚才所说的写状态是由同步状态的低16位表示的**。
 
 # 3.读锁详解 #
 ## 3.1.读锁的获取 ##
 看完了写锁，现在来看看读锁，读锁不是独占式锁，即同一时刻该锁可以被多个读线程获取也就是一种共享式锁。按照之前对AQS介绍，实现共享式同步组件的同步语义需要通过重写AQS的tryAcquireShared方法和tryReleaseShared方法。读锁的获取实现方法为：
-
+```java
 	protected final int tryAcquireShared(int unused) {
 	    /*
 	     * Walkthrough:
@@ -137,12 +137,12 @@
 		//4. 处理在第二步中CAS操作失败的自旋已经实现重入性
 	    return fullTryAcquireShared(current);
 	}
-
+```
 代码的逻辑请看注释，需要注意的是  **当写锁被其他线程获取后，读锁获取失败**，否则获取成功利用CAS更新同步状态。另外，当前同步状态需要加上SHARED_UNIT（`(1 << SHARED_SHIFT)`即0x00010000）的原因这是我们在上面所说的同步状态的高16位用来表示读锁被获取的次数。如果CAS失败或者已经获取读锁的线程再次获取读锁时，是靠fullTryAcquireShared方法实现的，这段代码就不展开说了，有兴趣可以看看。
 
 ## 3.2.读锁的释放 ##
 读锁释放的实现主要通过方法tryReleaseShared，源码如下，主要逻辑请看注释：
-
+```java
 	protected final boolean tryReleaseShared(int unused) {
 	    Thread current = Thread.currentThread();
 		// 前面还是为了实现getReadHoldCount等新功能
@@ -175,10 +175,10 @@
 	            return nextc == 0;
 	    }
 	}
-
+```
 # 4.锁降级 #
 读写锁支持锁降级，**遵循按照获取写锁，获取读锁再释放写锁的次序，写锁能够降级成为读锁**，不支持锁升级，关于锁降级下面的示例代码摘自ReentrantWriteReadLock源码中：
-
+```java
 	void processCachedData() {
 	        rwl.readLock().lock();
 	        if (!cacheValid) {
@@ -206,3 +206,4 @@
 	      }
 	    }
 	}
+```
