@@ -2,11 +2,11 @@
 
 # 1.ConcurrentHashmap简介 #
 在使用HashMap时在多线程情况下扩容会出现CPU接近100%的情况，因为hashmap并不是线程安全的，通常我们可以使用在java体系中古老的hashtable类，该类基本上所有的方法都采用synchronized进行线程安全的控制，可想而知，在高并发的情况下，每次只有一个线程能够获取对象监视器锁，这样的并发性能的确不令人满意。另外一种方式通过Collections的`Map<K,V> synchronizedMap(Map<K,V> m)`将hashmap包装成一个线程安全的map。比如SynchronzedMap的put方法源码为：
-
+```java
 	public V put(K key, V value) {
 	    synchronized (mutex) {return m.put(key, value);}
 	}
-
+```
 实际上SynchronizedMap实现依然是采用synchronized独占式锁进行线程安全的并发控制的。同样，这种方案的性能也是令人不太满意的。针对这种境况，Doug Lea大师不遗余力的为我们创造了一些线程安全的并发容器，让每一个java开发人员倍感幸福。相对于hashmap来说，ConcurrentHashMap就是线程安全的map，其中**利用了锁分段的思想提高了并发度**。
 
 
@@ -40,6 +40,7 @@ volatile int sizeCtl;
 4. **sun.misc.Unsafe U**
 在ConcurrentHashMapde的实现中可以看到大量的U.compareAndSwapXXXX的方法去修改ConcurrentHashMap的一些属性。这些方法实际上是利用了CAS算法保证了线程安全性，这是一种乐观策略，假设每一次操作都不会产生冲突，当且仅当冲突发生的时候再去尝试。而CAS操作依赖于现代处理器指令集，通过底层**CMPXCHG**指令实现。CAS(V,O,N)核心思想为：**若当前变量实际值V与期望的旧值O相同，则表明该变量没被其他线程进行修改，因此可以安全的将新值N赋值给变量；若当前变量实际值V与期望的旧值O不相同，则表明该变量已经被其他线程做了处理，此时将新值N赋给变量操作就是不安全的，在进行重试**。而在大量的同步组件和并发容器的实现中使用CAS是通过`sun.misc.Unsafe`类实现的，该类提供了一些可以直接操控内存和线程的底层操作，可以理解为java中的“指针”。该成员变量的获取是在静态代码块中：
 
+```java
 		static {
 		    try {
 		        U = sun.misc.Unsafe.getUnsafe();
@@ -48,13 +49,14 @@ volatile int sizeCtl;
 		        throw new Error(e);
 		    }
 		}
-
+```
 
 > **ConcurrentHashMap中关键内部类**
 
 1. **Node**
 Node类实现了Map.Entry接口，主要存放key-value对，并且具有next域
 
+```java
 		static class Node<K,V> implements Map.Entry<K,V> {
 		        final int hash;
 		        final K key;
@@ -62,12 +64,14 @@ Node类实现了Map.Entry接口，主要存放key-value对，并且具有next域
 		        volatile Node<K,V> next;
 				......
 		}
+```
 
 另外可以看出很多属性都是用volatile进行修饰的，也就是为了保证内存可见性。
 
 2. **TreeNode**
 树节点，继承于承载数据的Node类。而红黑树的操作是针对TreeBin类的，从该类的注释也可以看出，也就是TreeBin会将TreeNode进行再一次封装
 
+```java
 		**
 		 * Nodes for use in TreeBins
 		 */
@@ -79,10 +83,12 @@ Node类实现了Map.Entry接口，主要存放key-value对，并且具有next域
 		        boolean red;
 				......
 		}
+```
 
 3. **TreeBin**
 这个类并不负责包装用户的key、value信息，而是包装的很多TreeNode节点。实际的ConcurrentHashMap“数组”中，存放的是TreeBin对象，而不是TreeNode对象。
 
+```java
 		static final class TreeBin<K,V> extends Node<K,V> {
 		        TreeNode<K,V> root;
 		        volatile TreeNode<K,V> first;
@@ -94,10 +100,12 @@ Node类实现了Map.Entry接口，主要存放key-value对，并且具有next域
 		        static final int READER = 4; // increment value for setting read lock
 				......
 		}
+```
 
 4. **ForwardingNode**
 在扩容时才会出现的特殊节点，其key,value,hash全部为null。并拥有nextTable指针引用新的table数组。
 
+```java
 		static final class ForwardingNode<K,V> extends Node<K,V> {
 		    final Node<K,V>[] nextTable;
 		    ForwardingNode(Node<K,V>[] tab) {
@@ -106,7 +114,7 @@ Node类实现了Map.Entry接口，主要存放key-value对，并且具有next域
 		    }
 		   .....
 		}
-
+```
 
 > **CAS关键操作**
 
@@ -115,25 +123,32 @@ Node类实现了Map.Entry接口，主要存放key-value对，并且具有next域
 
 1. **tabAt**
 
+```java
 		static final <K,V> Node<K,V> tabAt(Node<K,V>[] tab, int i) {
 		    return (Node<K,V>)U.getObjectVolatile(tab, ((long)i << ASHIFT) + ABASE);
 		}
+```
+
 该方法用来获取table数组中索引为i的Node元素。
 
 2. **casTabAt**
 
+```java
 		static final <K,V> boolean casTabAt(Node<K,V>[] tab, int i,
 		                                    Node<K,V> c, Node<K,V> v) {
 		    return U.compareAndSwapObject(tab, ((long)i << ASHIFT) + ABASE, c, v);
 		}
+```
 
     利用CAS操作设置table数组中索引为i的元素
 
 3. **setTabAt**
 
+```java
 		static final <K,V> void setTabAt(Node<K,V>[] tab, int i, Node<K,V> v) {
 		    U.putObjectVolatile(tab, ((long)i << ASHIFT) + ABASE, v);
 		}
+```
 
     该方法用来设置table数组中索引为i的元素
 
@@ -143,6 +158,7 @@ Node类实现了Map.Entry接口，主要存放key-value对，并且具有next域
 ## 3.1 实例构造器方法 ##
 在使用ConcurrentHashMap第一件事自然而然就是new 出来一个ConcurrentHashMap对象，一共提供了如下几个构造器方法：
 
+```java
 	// 1. 构造一个空的map，即table数组还未初始化，初始化放在第一次插入数据时，默认大小为16
 	ConcurrentHashMap()
 	// 2. 给定map的大小
@@ -153,9 +169,11 @@ Node类实现了Map.Entry接口，主要存放key-value对，并且具有next域
 	ConcurrentHashMap(int initialCapacity, float loadFactor)
 	// 5. 给定map大小，加载因子以及并发度（预计同时操作数据的线程）
 	ConcurrentHashMap(int initialCapacity,float loadFactor, int concurrencyLevel)
+```
 
 ConcurrentHashMap一共给我们提供了5中构造器方法，具体使用请看注释，我们来看看第2种构造器，传入指定大小时的情况，该构造器源码为：
 
+```java
 	public ConcurrentHashMap(int initialCapacity) {
 		//1. 小于0直接抛异常
 	    if (initialCapacity < 0)
@@ -167,9 +185,11 @@ ConcurrentHashMap一共给我们提供了5中构造器方法，具体使用请�
 		//3. 赋值给sizeCtl
 	    this.sizeCtl = cap;
 	}
+```
 
 这段代码的逻辑请看注释，很容易理解，如果小于0就直接抛出异常，如果指定值大于了所允许的最大值的话就取最大值，否则，在对指定值做进一步处理。最后将cap赋值给sizeCtl,关于sizeCtl的说明请看上面的说明，**当调用构造器方法之后，sizeCtl的大小应该就代表了ConcurrentHashMap的大小，即table数组长度**。tableSizeFor做了哪些事情了？源码为：
 
+```java
 	/**
 	 * Returns a power of two table size for the given desired capacity.
 	 * See Hackers Delight, sec 3.2
@@ -183,12 +203,14 @@ ConcurrentHashMap一共给我们提供了5中构造器方法，具体使用请�
 	    n |= n >>> 16;
 	    return (n < 0) ? 1 : (n >= MAXIMUM_CAPACITY) ? MAXIMUM_CAPACITY : n + 1;
 	}
+```
 
 通过注释就很清楚了，该方法会将调用构造器方法时指定的大小转换成一个2的幂次方数，也就是说ConcurrentHashMap的大小一定是2的幂次方，比如，当指定大小为18时，为了满足2的幂次方特性，实际上concurrentHashMapd的大小为2的5次方（32）。另外，需要注意的是，**调用构造器方法的时候并未构造出table数组（可以理解为ConcurrentHashMap的数据容器），只是算出table数组的长度，当第一次向ConcurrentHashMap插入数据的时候才真正的完成初始化创建table数组的工作**。
 
 ## 3.2 initTable方法 ##
 直接上源码：
 
+```java
 	private final Node<K,V>[] initTable() {
 	    Node<K,V>[] tab; int sc;
 	    while ((tab = table) == null || tab.length == 0) {
@@ -215,12 +237,14 @@ ConcurrentHashMap一共给我们提供了5中构造器方法，具体使用请�
 	    }
 	    return tab;
 	}
+```
 
 代码的逻辑请见注释，有可能存在一个情况是多个线程同时走到这个方法中，为了保证能够正确初始化，在第1步中会先通过if进行判断，若当前已经有一个线程正在初始化即sizeCtl值变为-1，这个时候其他线程在If判断为true从而调用Thread.yield()让出CPU时间片。正在进行初始化的线程会调用U.compareAndSwapInt方法将sizeCtl改为-1即正在初始化的状态。另外还需要注意的事情是，在第四步中会进一步计算数组中可用的大小即为数组实际大小n乘以加载因子0.75.可以看看这里乘以0.75是怎么算的，0.75为四分之三，这里`n - (n >>> 2)`是不是刚好是n-(1/4)n=(3/4)n，挺有意思的吧:)。如果选择是无参的构造器的话，这里在new Node数组的时候会使用默认大小为`DEFAULT_CAPACITY`（16），然后乘以加载因子0.75为12，也就是说数组的可用大小为12。
 
 ## 3.3 put方法 ##
 使用ConcurrentHashMap最长用的也应该是put和get方法了吧，我们先来看看put方法是怎样实现的。调用put方法时实际具体实现是putVal方法，源码如下：
 
+```java
 	/** Implementation for put and putIfAbsent */
 	final V putVal(K key, V value, boolean onlyIfAbsent) {
 	    if (key == null || value == null) throw new NullPointerException();
@@ -293,6 +317,7 @@ ConcurrentHashMap一共给我们提供了5中构造器方法，具体使用请�
 	    addCount(1L, binCount);
 	    return null;
 	}
+```
 
 put方法的代码量有点长，我们按照上面的分解的步骤一步步来看。**从整体而言，为了解决线程安全的问题，ConcurrentHashMap使用了synchronzied和CAS的方式**。在之前了解过HashMap以及1.8版本之前的ConcurrenHashMap都应该知道ConcurrentHashMap结构图，为了方面下面的讲解这里先直接给出，如果对这有疑问的话，可以在网上随便搜搜即可。
 
@@ -310,9 +335,11 @@ put方法的代码量有点长，我们按照上面的分解的步骤一步步�
 
 我们知道对于一个hash表来说，hash值分散的不够均匀的话会大大增加哈希冲突的概率，从而影响到hash表的性能。因此通过spread方法进行了一次重hash从而大大减小哈希冲突的可能性。spread方法为：
 
+```java
 	static final int spread(int h) {
 	    return (h ^ (h >>> 16)) & HASH_BITS;
 	}
+```
 
 该方法主要是**将key的hashCode的低16位于高16位进行异或运算**，这样不仅能够使得hash值能够分散能够均匀减小hash冲突的概率，另外只用到了异或运算，在性能开销上也能兼顾，做到平衡的trade-off。
 
@@ -330,13 +357,15 @@ put方法的代码量有点长，我们按照上面的分解的步骤一步步�
 
 如果当前节点不为null，且该节点为特殊节点（forwardingNode）的话，就说明当前concurrentHashMap正在进行扩容操作，关于扩容操作，下面会作为一个具体的方法进行讲解。那么怎样确定当前的这个Node是不是特殊的节点了？是通过判断该节点的hash值是不是等于-1（MOVED）,代码为(fh = f.hash) == MOVED，对MOVED的解释在源码上也写的很清楚了：
 
+```java
 	static final int MOVED     = -1; // hash for forwarding nodes
-
+```
 
 > 5.当table[i]为链表的头结点，在链表中插入新值
 
 在table[i]不为null并且不为forwardingNode时，并且当前Node f的hash值大于0（fh >= 0）的话说明当前节点f为当前桶的所有的节点组成的链表的头结点。那么接下来，要想向ConcurrentHashMap插入新值的话就是向这个链表插入新值。通过synchronized (f)的方式进行加锁以实现线程安全性。往链表中插入节点的部分代码为：
 
+```java
 	if (fh >= 0) {
 	    binCount = 1;
 	    for (Node<K,V> e = f;; ++binCount) {
@@ -359,6 +388,7 @@ put方法的代码量有点长，我们按照上面的分解的步骤一步步�
 	        }
 	    }
 	}
+```
 
 这部分代码很好理解，就是两种情况：1. 在链表中如果找到了与待插入的键值对的key相同的节点，就直接覆盖即可；2. 如果直到找到了链表的末尾都没有找到的话，就直接将待插入的键值对追加到链表的末尾即可
 
@@ -366,6 +396,7 @@ put方法的代码量有点长，我们按照上面的分解的步骤一步步�
 
 按照之前的数组+链表的设计方案，这里存在一个问题，即使负载因子和Hash算法设计的再合理，也免不了会出现拉链过长的情况，一旦出现拉链过长，甚至在极端情况下，查找一个节点会出现时间复杂度为O(n)的情况，则会严重影响ConcurrentHashMap的性能，于是，在JDK1.8版本中，对数据结构做了进一步的优化，引入了红黑树。而当链表长度太长（默认超过8）时，链表就转换为红黑树，利用红黑树快速增删改查的特点提高ConcurrentHashMap的性能，其中会用到红黑树的插入、删除、查找等算法。当table[i]为红黑树的树节点时的操作为：
 
+```java
 	if (f instanceof TreeBin) {
 	    Node<K,V> p;
 	    binCount = 2;
@@ -376,6 +407,7 @@ put方法的代码量有点长，我们按照上面的分解的步骤一步步�
 	            p.val = value;
 	    }
 	}
+```
 
 首先在if中通过`f instanceof TreeBin`判断当前table[i]是否是树节点，这下也正好验证了我们在最上面介绍时说的TreeBin会对TreeNode做进一步封装，对红黑树进行操作的时候针对的是TreeBin而不是TreeNode。这段代码很简单，调用putTreeVal方法完成向红黑树插入新节点，同样的逻辑，**如果在红黑树中存在于待插入键值对的Key相同（hash值相等并且equals方法判断为true）的节点的话，就覆盖旧值，否则就向红黑树追加新节点**。
 
@@ -383,6 +415,7 @@ put方法的代码量有点长，我们按照上面的分解的步骤一步步�
 
 当完成数据新节点插入之后，会进一步对当前链表大小进行调整，这部分代码为：
 
+```java
 	if (binCount != 0) {
 	    if (binCount >= TREEIFY_THRESHOLD)
 	        treeifyBin(tab, i);
@@ -390,6 +423,7 @@ put方法的代码量有点长，我们按照上面的分解的步骤一步步�
 	        return oldVal;
 	    break;
 	}
+```
 
 很容易理解，如果当前链表节点个数大于等于8（TREEIFY_THRESHOLD）的时候，就会调用treeifyBin方法将tabel[i]（第i个散列桶）拉链转换成红黑树。
 
@@ -411,6 +445,7 @@ put方法的代码量有点长，我们按照上面的分解的步骤一步步�
 ## 3.4 get方法 ##
 看完了put方法再来看get方法就很容易了，用逆向思维去看就好，这样存的话我反过来这么取就好了。get方法源码为：
 
+```java
 	public V get(Object key) {
 	    Node<K,V>[] tab; Node<K,V> e, p; int n, eh; K ek;
 		// 1. 重hash
@@ -434,6 +469,7 @@ put方法的代码量有点长，我们按照上面的分解的步骤一步步�
 	    }
 	    return null;
 	}
+```
 
 代码的逻辑请看注释，首先先看当前的hash桶数组节点即table[i]是否为查找的节点，若是则直接返回；若不是，则继续再看当前是不是树节点？通过看节点的hash值是否为小于0，如果小于0则为树节点。如果是树节点在红黑树中查找节点；如果不是树节点，那就只剩下为链表的形式的一种可能性了，就向后遍历查找节点，若查找到则返回节点的value即可，若没有找到就返回null。
 
@@ -443,6 +479,7 @@ put方法的代码量有点长，我们按照上面的分解的步骤一步步�
 当ConcurrentHashMap容量不足的时候，需要对table进行扩容。这个方法的基本思想跟HashMap是很像的，但是由于它是支持并发扩容的，所以要复杂的多。原因是它支持多线程进行扩容操作，而并没有加锁。我想这样做的目的不仅仅是为了满足concurrent的要求，而是希望利用并发处理去减少扩容带来的时间影响。transfer方法源码为：
 
 
+```java
 	private final void transfer(Node<K,V>[] tab, Node<K,V>[] nextTab) {
 	    int n = tab.length, stride;
 	    if ((stride = (NCPU > 1) ? (n >>> 3) / NCPU : n) < MIN_TRANSFER_STRIDE)
@@ -588,6 +625,7 @@ put方法的代码量有点长，我们按照上面的分解的步骤一步步�
 	        }
 	    }
 	}
+```
 
 代码逻辑请看注释,整个扩容操作分为**两个部分**：
 
@@ -612,6 +650,7 @@ put方法的代码量有点长，我们按照上面的分解的步骤一步步�
 
 为了统计元素个数，ConcurrentHashMap定义了一些变量和一个内部类
 
+```java
 	/**
 	 * A padded cell for distributing counts.  Adapted from LongAdder
 	 * and Striped64.  See their internal docs for explanation.
@@ -638,12 +677,13 @@ put方法的代码量有点长，我们按照上面的分解的步骤一步步�
 	 * Table of counter cells. When non-null, size is a power of 2.
 	 */
 	private transient volatile CounterCell[] counterCells;
-
+```
 
 > **mappingCount与size方法**
 
 **mappingCount**与**size**方法的类似  从给出的注释来看，应该使用mappingCount代替size方法 两个方法都没有直接返回basecount 而是统计一次这个值，而这个值其实也是一个大概的数值，因此可能在统计的时候有其他线程正在执行插入或删除操作。
 
+```java
 	public int size() {
 	    long n = sumCount();
 	    return ((n < 0L) ? 0 :
@@ -676,7 +716,7 @@ put方法的代码量有点长，我们按照上面的分解的步骤一步步�
 	    }
 	    return sum;
 	}
-
+```
 
 
 
@@ -684,6 +724,7 @@ put方法的代码量有点长，我们按照上面的分解的步骤一步步�
 
 在put方法结尾处调用了addCount方法，把当前ConcurrentHashMap的元素个数+1这个方法一共做了两件事,更新baseCount的值，检测是否进行扩容。
 
+```java
 	private final void addCount(long x, int check) {
 	    CounterCell[] as; long b, s;
 	    //利用CAS方法更新baseCount的值 
@@ -726,7 +767,7 @@ put方法的代码量有点长，我们按照上面的分解的步骤一步步�
 	        }
 	    }
 	}
-
+```
 
 
 
